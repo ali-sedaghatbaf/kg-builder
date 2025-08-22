@@ -70,7 +70,7 @@ class Neo4j:
         if not response:
             logger.error("Failed to import contract data into Neo4j.")
             return {"error": "Failed to import contract data into Neo4j."}
-        return response
+        return dict(vars(response.summary.counters))
 
     async def close(self):
         """

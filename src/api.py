@@ -3,15 +3,10 @@ import logging
 import os
 import shutil
 from contextlib import asynccontextmanager
-from enum import Enum
-from pathlib import Path
 
-from cachetools import cached
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile
-from litellm import cache, file_content
 from redis.asyncio import Redis
-from regex import E
 
 from src.db.neo4j import Neo4j
 from src.doc.parser import PDFParser
@@ -65,16 +60,19 @@ async def upload_file(file: UploadFile = File(...)):
 
 @app.get("/classification/{contract_filename}")
 async def classify_contract(contract_filename: str):
-    cached_results = await app.state.redis.get(contract_filename)
+    cached_results: str = await app.state.redis.get(contract_filename)
     if cached_results is not None:
-        if "classification" in cached_results:
+        cache_data: dict = json.loads(cached_results)
+        if "classification" in cache_data:
             logger.info("Using cached classification result")
-            return json.loads(cached_results).get("classification")
+            return cache_data.get("classification")
 
-    parser = PDFParser()
-    file_content = await parser.parse_async(file_name=contract_filename, page_count=2)
-    classifier = ContractClassifier()
-    result = await classifier(contract_text=file_content)
+    parser: PDFParser = PDFParser()
+    file_content: str = await parser.parse_async(
+        file_name=contract_filename, page_count=2
+    )
+    classifier: ContractClassifier = ContractClassifier()
+    result: dict = await classifier(contract_text=file_content)
     if "error" in result:
         return result
     await app.state.redis.set(contract_filename, json.dumps({"classification": result}))
@@ -83,37 +81,45 @@ async def classify_contract(contract_filename: str):
 
 @app.get("/content_analysis/{contract_filename}")
 async def analyze_contract(contract_filename: str):
-    classification_result = None
+    classification_result: dict = None
 
-    cached_results = await app.state.redis.get(contract_filename)
+    cached_results: str = await app.state.redis.get(contract_filename)
     if cached_results is not None:
-        cached_data = json.loads(cached_results)
+        cached_data: dict = json.loads(cached_results)
 
         if "content_analysis" in cached_data:
             logger.info("Using cached content analysis result")
-            return json.loads(cached_data.get("content_analysis"))
+            return cached_data.get("content_analysis")
         if "classification" in cached_data:
             logger.info("Using cached classification result")
-            classification_result = json.loads(cached_data.get("classification"))
+            classification_result = cached_data.get("classification")
 
     if not classification_result:
         classification_result = await classify_contract(contract_filename)
         if "error" in classification_result:
             return classification_result
 
-    content_analyzer = ContractContentAnalyzer()
-    analysis_result = await content_analyzer(
+    parser: PDFParser = PDFParser()
+    file_content: str = await parser.parse_async(
+        file_name=contract_filename, page_count=10
+    )
+
+    content_analyzer: ContractContentAnalyzer = ContractContentAnalyzer()
+    analysis_result: dict = await content_analyzer(
         file_content, contract_type=classification_result.get("contract_type")
     )
+
     if "error" in analysis_result:
         return analysis_result
+
     await app.state.redis.set(
         contract_filename,
         json.dumps(
             {
                 "classification": classification_result,
                 "content_analysis": analysis_result,
-            }
+            },
+            default=str,
         ),
     )
     return analysis_result

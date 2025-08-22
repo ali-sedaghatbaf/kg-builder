@@ -46,7 +46,7 @@ class ContractContentAnalyzer(Module):
             result = await self.module.acall(
                 contract_text=contract_text, contract_type=contract_type
             )
-            return result.extracted_information.json()
+            return result.extracted_information.dict()
         except Exception as e:
             logger.error("Error during contract content analysis: %s", e, exc_info=True)
             return {

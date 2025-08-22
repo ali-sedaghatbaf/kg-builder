@@ -72,7 +72,7 @@ services:
     image: kg-builder-test:latest
     container_name: kg-builder-test
     env_file:
-      - .env.test
+      - .env
     depends_on:
       db-test:
         condition: service_healthy
