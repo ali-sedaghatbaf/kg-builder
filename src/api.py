@@ -6,8 +6,10 @@ from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile
+from httpx import ConnectError
 from redis.asyncio import Redis
 
+from langfuse import get_client
 from src.db.neo4j import Neo4j
 from src.doc.parser import PDFParser
 from src.lm.agents import ContractClassifier, ContractContentAnalyzer
@@ -24,11 +26,23 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    langfuse_client = get_client()
+    try:
+        if langfuse_client.auth_check():
+            logger.info("Langfuse client is authenticated and ready!")
+        else:
+            logger.warning(
+                "Langfuse authentication failed. Please check your credentials and host."
+            )
+    except ConnectError:
+        logger.warning("Langfuse connection failud. Please make sure it's running.")
+
     neo4j = Neo4j()
     app.state.neo4j = neo4j
     redis_client = Redis(
         host=os.getenv("REDIS_HOST"),
         port=int(os.getenv("REDIS_PORT")),
+        password=os.getenv("REDIS_AUTH"),
         db=0,
         decode_responses=True,
     )
@@ -168,4 +182,5 @@ async def generate_kg(contract_filename: str):
             }
         ),
     )
+    return result
     return result
