@@ -4,6 +4,7 @@ on:
     workflow_dispatch:
         inputs:
             run-job-3:
+                description: Run job 3
                 type: boolean
                 required: true
                 default: true
