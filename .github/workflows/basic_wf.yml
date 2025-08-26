@@ -7,7 +7,7 @@ on:
                 description: Run job 3
                 type: boolean
                 required: true
-                default: true
+               
 
 jobs:
   job-1:
