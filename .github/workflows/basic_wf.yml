@@ -28,5 +28,13 @@ jobs:
     needs: [job-2]
     if: ${{ github.event.inputs.run-job-3 }}
     steps:
-      - name: say-goodbye
-        run: echo "Goodbye World"
+      - name: say-omg
+        run: echo "OMG!"
+
+  job-4:
+    runs-on: ubuntu-latest
+    needs: [job-2, job-3]
+    steps:
+      - name: say-bye
+        run: echo "Bye World"
+
