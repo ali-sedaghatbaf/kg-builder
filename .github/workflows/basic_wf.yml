@@ -27,8 +27,10 @@ jobs:
     needs: [job-2]
     if: github.event.inputs.run-job-3 == 'true'
     steps:
-      - name: say-omg
-        run: echo "OMG!"
+      - name: echo-context
+        env: 
+            CONTEXT: ${{toJson(github)}}
+        run: echo $CONTEXT
 
   job-4:
     runs-on: ubuntu-latest
