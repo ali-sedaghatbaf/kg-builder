@@ -2,7 +2,12 @@ import logging
 
 from dspy import ChainOfThought, Module, Predict
 
-from src.lm.signatures import ContractClassification, ContractContentExtraction
+from src.lm.signatures import (
+    ContractClassification,
+    ContractContentExtraction,
+    OntologyAnalysis,
+    KnowledgeGraphExtraction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,5 +56,45 @@ class ContractContentAnalyzer(Module):
             logger.error("Error during contract content analysis: %s", e, exc_info=True)
             return {
                 "error": "Failed to analyze contract content.",
+                "details": str(e),
+            }
+
+
+class OntologyAnalyzer(Module):
+    """Analyzes the content of a text document to extract an ontology."""
+
+    def __init__(self):
+        self.module = Predict(signature=OntologyAnalysis)
+
+    async def forward(self, text: str) -> dict:
+        logger.info("Analyzing ontology from text.")
+        try:
+            result = await self.module.acall(text=text)
+            return result.ontology.dict()
+        except Exception as e:
+            logger.error("Error during ontology analysis: %s", e, exc_info=True)
+            return {
+                "error": "Failed to analyze ontology.",
+                "details": str(e),
+            }
+
+
+class KnowledgeGraphExtractor(Module):
+    """Extracts a knowledge graph from a text document."""
+
+    def __init__(self):
+        self.module = Predict(signature=KnowledgeGraphExtraction)
+
+    async def forward(self, text: str, ontology: dict) -> dict:
+        logger.info("Extracting knowledge graph from text.")
+        try:
+            result = await self.module.acall(text=text, ontology=ontology)
+            return result.knowledge_graph.dict()
+        except Exception as e:
+            logger.error(
+                "Error during knowledge graph extraction: %s", e, exc_info=True
+            )
+            return {
+                "error": "Failed to extract knowledge graph.",
                 "details": str(e),
             }

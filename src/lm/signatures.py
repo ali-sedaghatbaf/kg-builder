@@ -1,6 +1,12 @@
 from dspy import InputField, OutputField, Signature
 
-from src.lm.models import AffiliateAgreement, CoBranding, ContractType
+from src.lm.models import (
+    AffiliateAgreement,
+    CoBranding,
+    ContractType,
+    Ontology,
+    KnowledgeGraph,
+)
 
 
 class ContractClassification(Signature):
@@ -14,4 +20,19 @@ class ContractContentExtraction(Signature):
     contract_type: ContractType = InputField(description="The type of the contract")
     extracted_information: AffiliateAgreement | CoBranding = OutputField(
         description="The extracted information from the contract"
+    )
+
+
+class OntologyAnalysis(Signature):
+    text: str = InputField(description="The text to extract the ontology from.")
+    ontology: Ontology = OutputField(
+        description="The extracted ontology in a JSON format. "
+    )
+
+
+class KnowledgeGraphExtraction(Signature):
+    text: str = InputField(description="The text to extract the knowledge graph from.")
+    ontology: Ontology = InputField(description="The ontology of the knowledge graph. ")
+    knowledge_graph: KnowledgeGraph = OutputField(
+        description="The extracted knowledge graph. "
     )

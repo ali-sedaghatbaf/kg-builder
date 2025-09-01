@@ -7,15 +7,19 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile
 from httpx import ConnectError
+from langfuse import get_client
 from redis.asyncio import Redis
 
-from langfuse import get_client
 from src.db.neo4j import Neo4j
 from src.doc.parser import PDFParser
-from src.lm.agents import ContractClassifier, ContractContentAnalyzer
+from src.lm.agents import (
+    ContractClassifier,
+    ContractContentAnalyzer,
+    OntologyAnalyzer,
+    KnowledgeGraphExtractor,
+)
 from src.lm.config import setup_dspy
-from src.lm.models import ContractType
-from src.utils import EnumEncoder, setup_logging
+from src.utils import setup_logging
 
 load_dotenv()
 setup_logging()
@@ -139,16 +143,16 @@ async def analyze_contract(contract_filename: str):
     return analysis_result
 
 
-@app.get("/kg/{contract_filename}")
-async def generate_kg(contract_filename: str):
+@app.get("/content_storage/{contract_filename}")
+async def store_content(contract_filename: str):
     content_analysis_result = None
     classification_result = None
     cached_results = await app.state.redis.get(contract_filename)
     if cached_results is not None:
         cached_data = json.loads(cached_results)
-        if "kg" in cached_data:
+        if "storage" in cached_data:
             logger.info("Using cached kg result")
-            return cached_data["kg"]
+            return cached_data["storage"]
         if "content_analysis" in cached_data:
             logger.info("Using cached content analysis result")
             content_analysis_result = cached_data.get("content_analysis")
@@ -162,7 +166,6 @@ async def generate_kg(contract_filename: str):
         cached_results = await app.state.redis.get(contract_filename)
         cached_data = json.loads(cached_results)
         classification_result = cached_data.get("classification")
-    print(content_analysis_result["agreement_date"])
 
     db = app.state.neo4j
     result = await db.generate_contract_kg(
@@ -178,9 +181,30 @@ async def generate_kg(contract_filename: str):
             {
                 "classification": classification_result,
                 "content_analysis": content_analysis_result,
-                "kg": result,
+                "storage": result,
             }
         ),
     )
     return result
+
+
+@app.get("/ontology_analysis/{contract_filename}")
+async def analyze_ontology(contract_filename: str):
+    parser: PDFParser = PDFParser()
+    file_content: str = await parser.parse_async(file_name=contract_filename)
+    analyzer: OntologyAnalyzer = OntologyAnalyzer()
+    results = await analyzer(text=file_content)
+    return results
+
+
+@app.get("/kg_extraction/{contract_filename}")
+async def extract_knowledge_graph(contract_filename: str):
+    parser: PDFParser = PDFParser()
+    file_content: str = await parser.parse_async(file_name=contract_filename)
+    analyzer: OntologyAnalyzer = OntologyAnalyzer()
+    ontology = await analyzer(file_content)
+    if "error" in ontology:
+        return ontology
+    kg_extractor: KnowledgeGraphExtractor = KnowledgeGraphExtractor()
+    result = await kg_extractor(text=file_content, ontology=ontology)
     return result

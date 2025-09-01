@@ -4,7 +4,7 @@ from pathlib import Path
 import uvicorn
 
 
-async def main():
+def main():
     if Path.exists(Path(__file__).parent / ".env"):
         from dotenv import load_dotenv
 

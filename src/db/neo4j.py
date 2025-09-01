@@ -1,6 +1,5 @@
 import logging
 import os
-from datetime import datetime
 
 from neo4j import AsyncGraphDatabase
 
