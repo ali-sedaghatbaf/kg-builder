@@ -21,14 +21,14 @@ jobs:
     steps:
       - name: say-welcome
         run: echo "Welcome to Github Actions"
-    
+
   job-3:
     runs-on: ubuntu-latest
     needs: [job-2]
     if: github.event.inputs.run-job-3 == 'true'
     steps:
       - name: echo-context
-        env: 
+        env:
             CONTEXT: ${{toJson(github)}}
         run: echo $CONTEXT
 

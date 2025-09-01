@@ -1,7 +1,8 @@
 import logging
-import os
 
 from neo4j import AsyncGraphDatabase
+
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -16,14 +17,21 @@ class Neo4j:
         Raises:
             ValueError: If required environment variables are not set.
         """
-        uri = os.getenv("APP_NEO4J_URI")
-        user = os.getenv("APP_NEO4J_USER")
-        password = os.getenv("APP_NEO4J_PASSWORD")
+        uri = settings.NEO4J_URI
+        user = settings.NEO4J_USER
+        password = (
+            settings.NEO4J_PASSWORD.get_secret_value()
+            if settings.NEO4J_PASSWORD
+            else ""
+        )
+
         if not all((uri, user, password)):
             logger.error("NEO4J_URI, NEO4J_USER, and NEO4J_PASSWORD must be set.")
             raise ValueError("NEO4J_URI, NEO4J_USER, and NEO4J_PASSWORD must be set.")
         logger.info("Connecting to Neo4j database at %s", uri)
-        self.driver = AsyncGraphDatabase.driver(uri=uri, auth=(user, password))
+        self.driver = AsyncGraphDatabase.driver(
+            uri=uri.encoded_string(), auth=(user, password)
+        )
         if not self.driver.session():
             logger.error("Failed to connect to Neo4j database.")
             raise ConnectionError("Failed to connect to Neo4j database.")
@@ -34,18 +42,18 @@ class Neo4j:
         MERGE (c:Contract {path: $path})
         //SET c += apoc.map.clean(contract, ["parties", "agreement_date", "effective_date", "expiration_date"], [])
         // Cast to date
-        SET c.agreement_date = CASE 
-            WHEN c.agreement_date IS NULL THEN NULL 
-            ELSE date(c.agreement_date) 
-            END, 
-            c.effective_date =     
-            CASE 
-            WHEN c.effective_date IS NULL THEN NULL 
+        SET c.agreement_date = CASE
+            WHEN c.agreement_date IS NULL THEN NULL
+            ELSE date(c.agreement_date)
+            END,
+            c.effective_date =
+            CASE
+            WHEN c.effective_date IS NULL THEN NULL
             ELSE date(contract.effective_date)
             END,
-            c.expiration_date = 
-            CASE 
-            WHEN c.expiration_date IS NULL THEN NULL 
+            c.expiration_date =
+            CASE
+            WHEN c.expiration_date IS NULL THEN NULL
             ELSE date(contract.expiration_date)
             END
 

@@ -13,17 +13,14 @@ dependencies = [
     "neo4j>=5.28.2",
     "openinference-instrumentation-dspy>=0.1.28",
     "pydantic>=2.11.7",
+    "pydantic-settings>=2.10.1",
     "python-multipart>=0.0.20",
     "redis>=6.4.0",
 ]
 
 [dependency-groups]
 dev = [
-    "mypy>=1.17.1",
-    "pyright>=1.1.404",
     "pytest>=8.4.1",
-    "python-dotenv>=1.1.1",
-    "ruff>=0.12.9",
     "uvicorn>=0.35.0",
 ]
 
@@ -44,4 +41,8 @@ force-sort-within-sections = true
 [tool.pyright]
 include = ["src"]
 pythonVersion = "3.11"
-typeCheckingMode = "basic"
+typeCheckingMode = "standard"
+reportMissingImports = true
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

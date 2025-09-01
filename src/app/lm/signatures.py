@@ -1,11 +1,11 @@
 from dspy import InputField, OutputField, Signature
 
-from src.lm.models import (
+from .models import (
     AffiliateAgreement,
     CoBranding,
     ContractType,
-    Ontology,
     KnowledgeGraph,
+    Ontology,
 )
 
 

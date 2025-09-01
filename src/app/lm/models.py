@@ -2,7 +2,7 @@ from datetime import date
 from enum import Enum
 from typing import Any, Dict
 
-from pydantic import BaseModel, Field, field_validator, ValidationInfo
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 
 class ContractType(Enum):
@@ -150,6 +150,8 @@ class Relation(BaseModel):
         cls, v: Dict[str, Any], info: ValidationInfo
     ) -> Dict[str, Any]:
         rel_type = info.data.get("type")
+        if rel_type is None:
+            raise ValueError("Relation type is required")
         acceptable_properties = rel_type.property_names
         if acceptable_properties is not None:
             for key, value in v.items():
@@ -170,6 +172,9 @@ class KnowledgeGraph(BaseModel):
         cls, v: list[Relation], info: ValidationInfo
     ) -> list[Relation]:
         entities = info.data.get("entities")
+        if entities is None:
+            raise ValueError("Entities are required")
+
         for relation in v:
             if relation.subject not in entities:
                 raise ValueError(f"Invalid subject entity: {relation.subject}")

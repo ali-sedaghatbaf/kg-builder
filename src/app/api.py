@@ -1,29 +1,28 @@
+from contextlib import asynccontextmanager
 import json
 import logging
-import os
 import shutil
-from contextlib import asynccontextmanager
+from typing import Any
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile
 from httpx import ConnectError
 from langfuse import get_client
 from redis.asyncio import Redis
 
-from src.db.neo4j import Neo4j
-from src.doc.parser import PDFParser
-from src.lm.agents import (
+from app.config import settings
+from app.db.neo4j import Neo4j
+from app.doc.parser import PDFParser
+from app.lm.agents import (
     ContractClassifier,
     ContractContentAnalyzer,
-    OntologyAnalyzer,
     KnowledgeGraphExtractor,
+    OntologyAnalyzer,
 )
-from src.lm.config import setup_dspy
-from src.utils import setup_logging
+from app.lm.setup import setup_dspy
+from app.utils import setup_logging
 
-load_dotenv()
 setup_logging()
-setup_dspy()
+
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +30,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     langfuse_client = get_client()
+    app.state.langfuse = langfuse_client
     try:
         if langfuse_client.auth_check():
             logger.info("Langfuse client is authenticated and ready!")
@@ -44,13 +44,12 @@ async def lifespan(app: FastAPI):
     neo4j = Neo4j()
     app.state.neo4j = neo4j
     redis_client = Redis(
-        host=os.getenv("REDIS_HOST"),
-        port=int(os.getenv("REDIS_PORT")),
-        password=os.getenv("REDIS_AUTH"),
-        db=0,
+        host=settings.REDIS_HOST,
+        port=settings.REDIS_PORT,
+        db=settings.REDIS_DB,
         decode_responses=True,
     )
-    app.state.redis = redis_client
+    setup_dspy()
 
     yield
     # Cleanup resources on shutdown
@@ -67,7 +66,7 @@ def read_root():
 
 
 @app.post("/upload/")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...)) -> dict[str, Any]:
     # Save the uploaded file to disk
     logger.info(f"Uploading file: {file.filename}")
     with open(f"uploads/{file.filename}", "wb") as buffer:
@@ -77,54 +76,32 @@ async def upload_file(file: UploadFile = File(...)):
 
 
 @app.get("/classification/{contract_filename}")
-async def classify_contract(contract_filename: str):
-    cached_results: str = await app.state.redis.get(contract_filename)
-    if cached_results is not None:
-        cache_data: dict = json.loads(cached_results)
-        if "classification" in cache_data:
-            logger.info("Using cached classification result")
-            return cache_data.get("classification")
-
+async def classify_contract(contract_filename: str) -> dict[str, Any]:
     parser: PDFParser = PDFParser()
     file_content: str = await parser.parse_async(
         file_name=contract_filename, page_count=2
     )
     classifier: ContractClassifier = ContractClassifier()
-    result: dict = await classifier(contract_text=file_content)
+    result: dict = await classifier.forward(contract_text=file_content)
     if "error" in result:
         return result
-    await app.state.redis.set(contract_filename, json.dumps({"classification": result}))
     return result
 
 
 @app.get("/content_analysis/{contract_filename}")
-async def analyze_contract(contract_filename: str):
-    classification_result: dict = None
-
-    cached_results: str = await app.state.redis.get(contract_filename)
-    if cached_results is not None:
-        cached_data: dict = json.loads(cached_results)
-
-        if "content_analysis" in cached_data:
-            logger.info("Using cached content analysis result")
-            return cached_data.get("content_analysis")
-        if "classification" in cached_data:
-            logger.info("Using cached classification result")
-            classification_result = cached_data.get("classification")
-
-    if not classification_result:
-        classification_result = await classify_contract(contract_filename)
-        if "error" in classification_result:
-            return classification_result
+async def analyze_contract(contract_filename: str) -> dict[str, Any]:
+    classification_result: dict = await classify_contract(contract_filename)
+    if "error" in classification_result:
+        return classification_result
 
     parser: PDFParser = PDFParser()
     file_content: str = await parser.parse_async(
         file_name=contract_filename, page_count=10
     )
-
+    contract_type: str = classification_result.get("contract_type", "")
     content_analyzer: ContractContentAnalyzer = ContractContentAnalyzer()
-    analysis_result: dict = await content_analyzer(
-        file_content, contract_type=classification_result.get("contract_type")
+    analysis_result: dict = await content_analyzer.forward(
+        file_content, contract_type=contract_type
     )
 
     if "error" in analysis_result:
@@ -144,7 +121,7 @@ async def analyze_contract(contract_filename: str):
 
 
 @app.get("/content_storage/{contract_filename}")
-async def store_content(contract_filename: str):
+async def store_content(contract_filename: str) -> dict[str, Any]:
     content_analysis_result = None
     classification_result = None
     cached_results = await app.state.redis.get(contract_filename)
@@ -193,7 +170,7 @@ async def analyze_ontology(contract_filename: str):
     parser: PDFParser = PDFParser()
     file_content: str = await parser.parse_async(file_name=contract_filename)
     analyzer: OntologyAnalyzer = OntologyAnalyzer()
-    results = await analyzer(text=file_content)
+    results = await analyzer.forward(text=file_content)
     return results
 
 
@@ -202,9 +179,9 @@ async def extract_knowledge_graph(contract_filename: str):
     parser: PDFParser = PDFParser()
     file_content: str = await parser.parse_async(file_name=contract_filename)
     analyzer: OntologyAnalyzer = OntologyAnalyzer()
-    ontology = await analyzer(file_content)
+    ontology = await analyzer.forward(file_content)
     if "error" in ontology:
         return ontology
     kg_extractor: KnowledgeGraphExtractor = KnowledgeGraphExtractor()
-    result = await kg_extractor(text=file_content, ontology=ontology)
+    result = await kg_extractor.forward(text=file_content, ontology=ontology)
     return result

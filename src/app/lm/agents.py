@@ -2,11 +2,11 @@ import logging
 
 from dspy import ChainOfThought, Module, Predict
 
-from src.lm.signatures import (
+from .signatures import (
     ContractClassification,
     ContractContentExtraction,
-    OntologyAnalysis,
     KnowledgeGraphExtraction,
+    OntologyAnalysis,
 )
 
 logger = logging.getLogger(__name__)

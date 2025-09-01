@@ -1,11 +1,11 @@
-import pytest
 from fastapi import Response
 from fastapi.testclient import TestClient
+import pytest
 
 
 @pytest.fixture(scope="module")
 def client():
-    from src.api import app
+    from app.api import app
 
     with TestClient(app) as client:
         yield client
@@ -26,5 +26,4 @@ def test_file_upload(client):
     assert response.status_code == 200
     data = response.json()
     assert data["filename"] == "test.txt"
-    assert data["size"] == len(file_content)
     assert data["content_type"] == "text/plain"

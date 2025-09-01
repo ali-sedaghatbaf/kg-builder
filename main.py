@@ -1,19 +1,13 @@
-import os
-from pathlib import Path
-
 import uvicorn
+
+from app.config import settings
 
 
 def main():
-    if Path.exists(Path(__file__).parent / ".env"):
-        from dotenv import load_dotenv
-
-        load_dotenv()
-
     uvicorn.run(
         "src.api:app",
-        host="0.0.0.0",
-        port=int(os.getenv("API_PORT", 8000)),
+        host=settings.API_HOST,
+        port=settings.API_PORT,
         reload=True,
     )
 

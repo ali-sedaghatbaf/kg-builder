@@ -1,6 +1,6 @@
+from enum import Enum
 import json
 import logging
-from enum import Enum
 
 
 def setup_logging(level=logging.INFO):
@@ -8,7 +8,7 @@ def setup_logging(level=logging.INFO):
 
 
 class EnumEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, Enum):
-            return obj.value
-        return super().default(obj)
+    def default(self, o):
+        if isinstance(o, Enum):
+            return o.value
+        return super().default(o)
