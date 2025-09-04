@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
 
     yield
     # Cleanup resources on shutdown
-    await redis_client.close()
+    await redis_client.aclose()
     await neo4j.close()
 
 
