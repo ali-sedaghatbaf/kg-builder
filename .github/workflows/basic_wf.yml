@@ -38,3 +38,24 @@ jobs:
     steps:
       - name: say-bye
         run: echo "Bye World"
+name: CI with Docker Compose
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run containers with docker-compose
+        run: make up
+
+      - name: Shut down containers
+        if: always()
+        run: make down-v
