@@ -3,92 +3,68 @@ import logging
 from dspy import ChainOfThought, Module, Predict
 
 from .signatures import (
-    ContractClassification,
-    ContractContentExtraction,
-    KnowledgeGraphExtraction,
-    OntologyAnalysis,
+    KGGeneration,
+    KGIntentQuestion,
+    KGSchemaProposal,
+    SchemaExtraction,
 )
 
 logger = logging.getLogger(__name__)
 
 
-class ContractClassifier(Module):
-    """
-    Given a list of available contract types, this module classifies a contract text into one of those types.
-
-    """
+class IntentDiscoveryAgent(Module):
+    """Interacts with the user to discover their intent for knowledge graph generation and gather information."""
 
     def __init__(self):
-        self.module = ChainOfThought(signature=ContractClassification)
+        super().__init__()
+        self.question_gen = ChainOfThought(KGIntentQuestion)
 
-    async def forward(self, contract_text: str) -> dict:
-        logger.info("Classifying contract text.")
-        try:
-            result = await self.module.acall(contract_text=contract_text)
-            return {
-                "contract_type": result.contract_type.value,
-                "reasons": result.thoughts,
-            }
-        except Exception as e:
-            logger.error("Error during contract classification: %s", e, exc_info=True)
-            return {
-                "error": "Failed to classify contract.",
-                "details": str(e),
-            }
+    async def aforward(
+        self, user_goal: str, file_content: str, gathered_info: str = ""
+    ):
+        return await self.question_gen.acall(
+            user_goal=user_goal, gathered_info=gathered_info, file_content=file_content
+        )
 
 
-class ContractContentAnalyzer(Module):
-    """
-    Analyzes the content of a contract based on its type and extracts relevant information.
-    """
+class SchemaProposalAgent(Module):
+    def __init__(self):
+        super().__init__()
+        self.schema_gen = ChainOfThought(KGSchemaProposal)
+
+    async def aforward(self, gathered_info: str):
+        return await self.schema_gen.acall(gathered_info=gathered_info)
+
+
+class SchemaExtractor(Module):
+    """Refines/extracts a schema from text given a proposed schema scaffold."""
 
     def __init__(self):
-        self.module = Predict(signature=ContractContentExtraction)
+        self.module = Predict(signature=SchemaExtraction)
 
-    async def forward(self, contract_text: str, contract_type: str) -> dict:
-        logger.info("Analyzing contract of type: %s", contract_type)
+    async def aforward(self, text: str, proposed_schema: dict) -> dict:
+        logger.info("Extracting schema from text with proposed scaffold.")
         try:
-            result = await self.module.acall(
-                contract_text=contract_text, contract_type=contract_type
-            )
-            return result.extracted_information.dict()
+            result = await self.module.acall(text=text, proposed_schema=proposed_schema)
+            extracted = getattr(result, "extracted_schema", None)
+            if extracted is None:
+                raise ValueError("SchemaExtraction returned no extracted_schema")
+            return extracted.dict() if hasattr(extracted, "dict") else extracted
         except Exception as e:
-            logger.error("Error during contract content analysis: %s", e, exc_info=True)
-            return {
-                "error": "Failed to analyze contract content.",
-                "details": str(e),
-            }
+            logger.error("Error during schema extraction: %s", e, exc_info=True)
+            return {"error": "Failed to extract schema.", "details": str(e)}
 
 
-class OntologyAnalyzer(Module):
-    """Analyzes the content of a text document to extract an ontology."""
-
-    def __init__(self):
-        self.module = Predict(signature=OntologyAnalysis)
-
-    async def forward(self, text: str) -> dict:
-        logger.info("Analyzing ontology from text.")
-        try:
-            result = await self.module.acall(text=text)
-            return result.ontology.dict()
-        except Exception as e:
-            logger.error("Error during ontology analysis: %s", e, exc_info=True)
-            return {
-                "error": "Failed to analyze ontology.",
-                "details": str(e),
-            }
-
-
-class KnowledgeGraphExtractor(Module):
+class KGGenerator(Module):
     """Extracts a knowledge graph from a text document."""
 
     def __init__(self):
-        self.module = Predict(signature=KnowledgeGraphExtraction)
+        self.module = Predict(signature=KGGeneration)
 
-    async def forward(self, text: str, ontology: dict) -> dict:
+    async def aforward(self, text: str, graph_schema: dict) -> dict:
         logger.info("Extracting knowledge graph from text.")
         try:
-            result = await self.module.acall(text=text, ontology=ontology)
+            result = await self.module.acall(text=text, graph_schema=graph_schema)
             return result.knowledge_graph.dict()
         except Exception as e:
             logger.error(

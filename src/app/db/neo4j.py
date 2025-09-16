@@ -2,7 +2,7 @@ import logging
 
 from neo4j import AsyncGraphDatabase
 
-from app.config import settings
+from ..config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -17,17 +17,20 @@ class Neo4j:
         Raises:
             ValueError: If required environment variables are not set.
         """
-        uri = settings.NEO4J_URI
-        user = settings.NEO4J_USER
+        settings = get_settings()
+        uri = settings.APP_NEO4J_URI
+        user = settings.APP_NEO4J_USER
         password = (
-            settings.NEO4J_PASSWORD.get_secret_value()
-            if settings.NEO4J_PASSWORD
+            settings.APP_NEO4J_PASSWORD.get_secret_value()
+            if settings.APP_NEO4J_PASSWORD
             else ""
         )
 
         if not all((uri, user, password)):
-            logger.error("NEO4J_URI, NEO4J_USER, and NEO4J_PASSWORD must be set.")
-            raise ValueError("NEO4J_URI, NEO4J_USER, and NEO4J_PASSWORD must be set.")
+            logger.error("APP_NEO4J_URI, NEO4J_USER, and NEO4J_PASSWORD must be set.")
+            raise ValueError(
+                "APP_NEO4J_URI, NEO4J_USER, and NEO4J_PASSWORD must be set."
+            )
         logger.info("Connecting to Neo4j database at %s", uri)
         self.driver = AsyncGraphDatabase.driver(
             uri=uri.encoded_string(), auth=(user, password)

@@ -18,10 +18,10 @@ help: ## Show available commands
 	@echo "  shell      Enter a shell in the '$(SERVICE)' container"
 
 build: ## Build docker images
-	$(DOCKER_COMPOSE) build
+	$(DOCKER_COMPOSE) build dev -t kg-builder:dev .
 
 up: ## Start containers in background
-	$(DOCKER_COMPOSE) up -d
+	$(DOCKER_COMPOSE) up -d frontend
 
 down: ## Stop and remove containers
 	$(DOCKER_COMPOSE) down
@@ -30,7 +30,10 @@ down-v: ## Stop and remove containers + volumes
 	$(DOCKER_COMPOSE) down -v
 
 down-rmi: ## Stop and remove containers + images
-	$(DOCKER_COMPOSE) down --rmi all
+	$(DOCKER_COMPOSE) down --rmi local
+
+down-all: ## Stop and remove containers, volumes, images, and networks
+	$(DOCKER_COMPOSE) down -v --rmi all --remove-orphans
 
 restart: down up ## Restart services
 
@@ -38,4 +41,4 @@ logs: ## Follow logs
 	$(DOCKER_COMPOSE) logs -f
 
 shell: ## Open a shell inside the app container
-	$(DOCKER_COMPOSE) exec $(SERVICE) sh
+	$(DOCKER_COMPOSE) exec $(SERVICE) bash

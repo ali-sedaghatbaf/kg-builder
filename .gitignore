@@ -1,4 +1,7 @@
 # Python-generated files
+.vscode
+.ruff_cache
+.pytest_cache
 __pycache__/
 *.py[oc]
 build/
@@ -10,3 +13,4 @@ wheels/
 .venv
 .env
 langfuse/
+frontend/node_modules/

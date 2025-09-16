@@ -24,7 +24,7 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["uv", "run", "uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uv", "run", "uvicorn", "src.app.api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
 # ───────────────────────────────
 # Test stage
@@ -49,4 +49,4 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["uv", "run", "gunicorn", "-k", "uvicorn.workers.UvicornWorker", "src.api:app", "--bind", "0.0.0.0:8000"]
+CMD ["uv", "run", "gunicorn", "-k", "uvicorn.workers.UvicornWorker", "api:app", "--bind", "0.0.0.0:8000"]

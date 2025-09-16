@@ -1,38 +1,48 @@
 from dspy import InputField, OutputField, Signature
 
 from .models import (
-    AffiliateAgreement,
-    CoBranding,
-    ContractType,
     KnowledgeGraph,
-    Ontology,
+    Schema,
 )
 
 
-class ContractClassification(Signature):
-    contract_text: str = InputField(description="The text of the contract to classify.")
-    contract_type: ContractType = OutputField(description="The type of the contract")
-    thoughts: str = OutputField(description="The reasoning behind the classification")
+class KGIntentQuestion(Signature):
+    """Ask the next clarifying question based on what we already know"""
 
-
-class ContractContentExtraction(Signature):
-    contract_text: str = InputField(description="The text of the contract to analyze.")
-    contract_type: ContractType = InputField(description="The type of the contract")
-    extracted_information: AffiliateAgreement | CoBranding = OutputField(
-        description="The extracted information from the contract"
+    user_goal = InputField(
+        desc="The user's high-level goal for generating a knowledge graph"
+    )
+    file_content = InputField(
+        desc="The content of the uploaded document (if any), to help tailor questions"
+    )
+    gathered_info = InputField(desc="The information gathered so far from the user")
+    question = OutputField(
+        desc="The next question to ask OR 'DONE' if enough info is gathered"
     )
 
 
-class OntologyAnalysis(Signature):
-    text: str = InputField(description="The text to extract the ontology from.")
-    ontology: Ontology = OutputField(
-        description="The extracted ontology in a JSON format. "
+class KGSchemaProposal(Signature):
+    """Generate a draft KG schema based on clarified user answers"""
+
+    gathered_info = InputField()
+    proposed_schema: Schema = OutputField(
+        description="A draft schema in JSON format, including entity and relation types"
     )
 
 
-class KnowledgeGraphExtraction(Signature):
+class SchemaExtraction(Signature):
+    text: str = InputField(description="The text to extract the schema from.")
+    proposed_schema: Schema = InputField(
+        description="A draft schema in JSON format, including entity and relation types"
+    )
+    extracted_schema: Schema = OutputField(
+        description="The extracted schema in a JSON format."
+    )
+
+
+class KGGeneration(Signature):
     text: str = InputField(description="The text to extract the knowledge graph from.")
-    ontology: Ontology = InputField(description="The ontology of the knowledge graph. ")
+    graph_schema: Schema = InputField(description="The schema of the knowledge graph. ")
     knowledge_graph: KnowledgeGraph = OutputField(
         description="The extracted knowledge graph. "
     )

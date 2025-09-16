@@ -7,14 +7,13 @@ services:
     volumes:
       - redis_data:/data
     command: >
-      --requirepass ${REDIS_AUTH:-myredissecret}
+      --requirepass ${REDIS_AUTH:-redis123}
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 3s
       retries: 5
-    networks:
-      - shared
+
   neo4j:
     image: neo4j:5.26
     container_name: neo4j
@@ -27,21 +26,20 @@ services:
       - neo4j_data:/var/lib/neo4j/data
       - neo4j_logs:/var/lib/neo4j/logs
     healthcheck:
-      test: [ "CMD", "cypher-shell", "-u", "${NEO4J_USER}", "-p", "${NEO4J_PASSWORD}", "--encryption=false", "RETURN 1" ]
+      test: [ "CMD", "cypher-shell", "-u", "${APP_NEO4J_USER}", "-p", "${APP_NEO4J_PASSWORD}", "--encryption=false", "RETURN 1" ]
       interval: 10s
       timeout: 5s
       retries: 5
   neo4j-test:
     image: neo4j:5.26
     container_name: neo4j-test
-    environment:
-      - NEO4J_USER:"neo4j"
-      - NEO4J_PASSWORD:"neo4j123"
+    env_file:
+      - .env
     volumes:
       - neo4j_test_data:/var/lib/neo4j/data
       - neo4j_logs:/var/lib/neo4j/logs
     healthcheck:
-      test: [ "CMD", "cypher-shell", "-u", "${NEO4J_USER}", "-p", "${NEO4J_PASSWORD}", "--encryption=false", "RETURN 1" ]
+      test: [ "CMD", "cypher-shell", "-u", "${APP_NEO4J_USER}", "-p", "${APP_NEO4J_PASSWORD}", "--encryption=false", "RETURN 1" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -74,6 +72,8 @@ services:
     container_name: kg-builder-test
     env_file:
       - .env
+    environment:
+      - REDIS_HOST=redis
     depends_on:
       neo4j-test:
         condition: service_healthy
@@ -92,6 +92,8 @@ services:
       target: prod
     env_file:
       - .env
+    environment:
+      - REDIS_HOST=redis
     ports:
       - "8001:8000"
     depends_on:
@@ -100,7 +102,25 @@ services:
       redis:
         condition: service_healthy
 
-    command: [ "/app/.venv/bin/gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000", "src.api:app", "--log-level", "debug" ]
+    command: [ "/app/.venv/bin/gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000", "api:app", "--log-level", "debug" ]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: dev
+    image: kg-builder-frontend:latest
+    container_name: kg-builder-frontend
+    environment:
+      - VITE_API_BASE=http://localhost:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      dev:
+        condition: service_started
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
 
 volumes:
   neo4j_data:
@@ -111,7 +131,3 @@ volumes:
     driver: local
   neo4j_logs:
     driver: local
-
-networks:
-  shared:
-    external: true

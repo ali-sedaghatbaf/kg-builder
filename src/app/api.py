@@ -1,25 +1,30 @@
+import asyncio
 from contextlib import asynccontextmanager
 import json
 import logging
+from pathlib import Path
 import shutil
-from typing import Any
+from typing import Any, AsyncGenerator
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from httpx import ConnectError
 from langfuse import get_client
+from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from app.config import settings
-from app.db.neo4j import Neo4j
-from app.doc.parser import PDFParser
-from app.lm.agents import (
-    ContractClassifier,
-    ContractContentAnalyzer,
-    KnowledgeGraphExtractor,
-    OntologyAnalyzer,
+from .config import get_settings
+from .db.neo4j import Neo4j
+from .doc.parser import PDFParser
+from .lm.agents import (
+    IntentDiscoveryAgent as IntentDiscoveryModule,
+    KGGenerator,
+    SchemaExtractor,
+    SchemaProposalAgent as SchemaProposalModule,
 )
-from app.lm.setup import setup_dspy
-from app.utils import setup_logging
+from .lm.setup import setup_dspy
+from .utils import setup_logging
 
 setup_logging()
 
@@ -29,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings = get_settings()
     langfuse_client = get_client()
     app.state.langfuse = langfuse_client
     try:
@@ -47,10 +53,18 @@ async def lifespan(app: FastAPI):
         host=settings.REDIS_HOST,
         port=settings.REDIS_PORT,
         db=settings.REDIS_DB,
+        password=(
+            settings.REDIS_AUTH.get_secret_value() if settings.REDIS_AUTH else None
+        ),
         decode_responses=True,
     )
-    setup_dspy()
-
+    app.state.redis = redis_client
+    setup_dspy(redis_client=redis_client)
+    app.state.intent_agent = IntentDiscoveryModule()
+    app.state.schema_proposal_agent = SchemaProposalModule()
+    app.state.schema_analyzer = SchemaExtractor()
+    app.state.kg_generator = KGGenerator()
+    app.state.parser = PDFParser()
     yield
     # Cleanup resources on shutdown
     await redis_client.aclose()
@@ -59,6 +73,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="KG Builder API", version="1.0.0", lifespan=lifespan)
 
+# Enable CORS for the frontend dev server
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.get("/")
 def read_root():
@@ -66,122 +89,245 @@ def read_root():
 
 
 @app.post("/upload/")
-async def upload_file(file: UploadFile = File(...)) -> dict[str, Any]:
+async def upload_file(
+    file: UploadFile = File(...),
+    conversation_id: str | None = Form(None),
+) -> dict[str, Any]:
     # Save the uploaded file to disk
     logger.info(f"Uploading file: {file.filename}")
-    with open(f"uploads/{file.filename}", "wb") as buffer:
+    filename = file.filename if file.filename is not None else "uploaded_file"
+    with open(
+        Path(__file__).parent.parent.parent / "uploads" / filename, "wb"
+    ) as buffer:
         shutil.copyfileobj(file.file, buffer)
+
+    # Record upload metadata in Redis under the conversation-specific key
+    try:
+        conv_id = conversation_id or "default"
+        await app.state.redis.set(
+            f"file:{conv_id}",
+            json.dumps(
+                {
+                    "filename": file.filename,
+                    "content_type": file.content_type,
+                }
+            ),
+        )
+
+    except Exception:
+        # Non-fatal if Redis is unavailable
+        pass
 
     return {"filename": file.filename, "content_type": file.content_type}
 
 
-@app.get("/classification/{contract_filename}")
-async def classify_contract(contract_filename: str) -> dict[str, Any]:
-    parser: PDFParser = PDFParser()
-    file_content: str = await parser.parse_async(
-        file_name=contract_filename, page_count=2
+class ChatRequest(BaseModel):
+    message: str
+    conversation_id: str | None = None
+
+
+async def _stream_text(text: str, delay: float = 0.01) -> AsyncGenerator[str, None]:
+    for ch in text:
+        yield ch
+        if delay:
+            await asyncio.sleep(delay)
+
+
+async def _stream_reply(conv_id: str, user_message: str) -> AsyncGenerator[str, None]:
+    redis: Redis = app.state.redis
+
+    # Require an uploaded file (keeps UX aligned with the flow)
+    file_key = f"file:{conv_id}"
+    file_state = await redis.get(file_key)
+    if not file_state:
+        async for ch in _stream_text(
+            "Please upload a document first by clicking the 'Upload File' button.\n"
+        ):
+            yield ch
+        return
+    file_info = json.loads(file_state)
+    file_content = file_info.get("content", "")
+    if not file_content:
+        filename = file_info.get("filename", "unknown")
+        try:
+            parser: PDFParser = app.state.parser
+            file_content: str = await parser.aparse(file_name=filename)
+
+            # Mark file as processed
+            file_info["content"] = file_content
+            await redis.set(file_key, json.dumps(file_info))
+        except Exception as e:
+            async for ch in _stream_text(f"Error processing uploaded file: {e}\n"):
+                yield ch
+            return
+
+    # If we are awaiting schema extraction confirmation, handle that first
+    pending_key = f"schema_pending:{conv_id}"
+    pending_raw = await redis.get(pending_key)
+    if pending_raw:
+        try:
+            pending = json.loads(pending_raw)
+        except Exception:
+            pending = None
+        proposal = (pending or {}).get("proposal")
+        if proposal:
+            lower_msg = (user_message or "").strip().lower()
+            proceed_markers = [
+                "extract schema",
+                "schema extraction",
+                "proceed with extraction",
+                "proceed with schema",
+                "run extraction",
+                "go ahead with schema",
+                "generate schema",
+            ]
+            cancel_markers = ["cancel", "stop", "abort", "not now", "later"]
+            affirmative = any(m in lower_msg for m in proceed_markers)
+            negative = any(m in lower_msg for m in cancel_markers)
+            if affirmative:
+                extractor: SchemaExtractor = app.state.schema_analyzer
+                async for ch in _stream_text(
+                    "Extracting the schema from the document...\n"
+                ):
+                    yield ch
+                try:
+                    extracted = await extractor.acall(
+                        text=file_content, proposed_schema=proposal
+                    )
+                    if isinstance(extracted, dict) and "error" in extracted:
+                        raise RuntimeError(
+                            extracted.get("details") or extracted["error"]
+                        )
+                    extracted_json = (
+                        extracted
+                        if isinstance(extracted, dict)
+                        else (
+                            extracted.dict()
+                            if hasattr(extracted, "dict")
+                            else extracted
+                        )
+                    )
+                    # Persist extracted schema for later steps
+                    await redis.set(
+                        f"schema_extracted:{conv_id}", json.dumps(extracted_json)
+                    )
+                    await redis.delete(pending_key)
+                    async for ch in _stream_text("Here is the extracted schema:\n"):
+                        yield ch
+                    async for ch in _stream_text(
+                        json.dumps(extracted_json, indent=2) + "\n"
+                    ):
+                        yield ch
+                except Exception as e:
+                    await redis.delete(pending_key)
+                    async for ch in _stream_text(f"Sorry, extraction failed: {e}\n"):
+                        yield ch
+                return
+            elif negative:
+                await redis.delete(pending_key)
+                # Acknowledge cancellation without prompting
+                async for ch in _stream_text("Understood. Extraction canceled.\n"):
+                    yield ch
+                return
+            else:
+                # No prompt; just let the user decide when to proceed in a later message
+                return
+
+    # Load discovery state
+    disc_key = f"discovery:{conv_id}"
+    state_raw = await redis.get(disc_key)
+    state: dict[str, Any] = {"goal": "", "qa": [], "awaiting": None}
+    if state_raw:
+        try:
+            state = json.loads(state_raw)
+        except Exception:
+            state = {"goal": "", "qa": [], "awaiting": None}
+
+    # Initialize goal from the user's first message, or attach as an answer/context
+    if not state.get("goal"):
+        state["goal"] = user_message.strip()
+    else:
+        awaiting = state.get("awaiting")
+        if awaiting:
+            state.setdefault("qa", []).append(
+                {"q": awaiting, "a": user_message.strip()}
+            )
+            state["awaiting"] = None
+        else:
+            state.setdefault("qa", []).append(
+                {"q": "(user note)", "a": user_message.strip()}
+            )
+
+    # Helper to build gathered_info for the LLM
+    def build_gathered_info(s: dict[str, Any]) -> str:
+        lines = [f"Goal: {s.get('goal', '').strip()}\n"]
+        for i, qa in enumerate(s.get("qa", []), start=1):
+            lines.append(f"Q{i}: {qa.get('q', '')}\nA{i}: {qa.get('a', '')}\n")
+        return "".join(lines)
+
+    # Intent discovery loop: ask one question at a time until DONE
+    discovery = app.state.intent_agent  # IntentDiscoveryModule instance
+    while True:
+        gathered_info = build_gathered_info(state)
+        res = await discovery.acall(
+            user_goal=state["goal"],
+            gathered_info=gathered_info,
+            file_content=file_content,
+        )
+        q = (getattr(res, "question", None) or "").strip()
+        if not q:
+            q = "Could you clarify your primary use case for the KG?"
+        if q.upper() == "DONE":
+            break
+        # Ask exactly one question and persist awaiting state
+        state["awaiting"] = q
+        await redis.set(disc_key, json.dumps(state))
+        async for ch in _stream_text(q + "\n"):
+            yield ch
+        return
+
+    # Discovery complete: produce a schema proposal
+    proposer = app.state.schema_proposal_agent  # SchemaProposalModule instance
+    gathered_info = build_gathered_info(state)
+    try:
+        prop = await proposer.acall(gathered_info=gathered_info)
+        schema_obj = getattr(prop, "proposed_schema", None)
+        if not schema_obj:
+            raise ValueError("No proposed_schema returned")
+        await redis.set(disc_key, json.dumps(state))
+        async for ch in _stream_text("Great! Here's a draft schema proposal:\n"):
+            yield ch
+        # Pretty print proposal for the UI to render
+        proposal_json = schema_obj.dict() if hasattr(schema_obj, "dict") else schema_obj
+        pretty = json.dumps(proposal_json, indent=2)
+        async for ch in _stream_text(pretty + "\n", delay=0):
+            yield ch
+        # Persist proposal and wait for explicit user request to extract
+        await redis.set(pending_key, json.dumps({"proposal": proposal_json}))
+        # Do not ask a question; user can send a message like "extract schema" to proceed
+        return
+    except Exception as e:
+        async for ch in _stream_text(
+            f"Sorry, I couldn't complete schema extraction: {e}\n"
+        ):
+            yield ch
+
+
+@app.post("/chat")
+async def chat(req: ChatRequest) -> StreamingResponse:
+    """Streams a textual response for a chat message.
+    Frontend consumes via fetch + ReadableStream.
+    """
+    conv_id = req.conversation_id or "default"
+    return StreamingResponse(
+        _stream_reply(conv_id, req.message), media_type="text/plain"
     )
-    classifier: ContractClassifier = ContractClassifier()
-    result: dict = await classifier.forward(contract_text=file_content)
-    if "error" in result:
-        return result
-    return result
 
 
-@app.get("/content_analysis/{contract_filename}")
-async def analyze_contract(contract_filename: str) -> dict[str, Any]:
-    classification_result: dict = await classify_contract(contract_filename)
-    if "error" in classification_result:
-        return classification_result
-
-    parser: PDFParser = PDFParser()
-    file_content: str = await parser.parse_async(
-        file_name=contract_filename, page_count=10
+def __store_intent(intent, awaiting_field: str | None = None) -> str:
+    return json.dumps(
+        {
+            "intent": intent.model_dump(),
+            "awaiting_field": awaiting_field,
+        }
     )
-    contract_type: str = classification_result.get("contract_type", "")
-    content_analyzer: ContractContentAnalyzer = ContractContentAnalyzer()
-    analysis_result: dict = await content_analyzer.forward(
-        file_content, contract_type=contract_type
-    )
-
-    if "error" in analysis_result:
-        return analysis_result
-
-    await app.state.redis.set(
-        contract_filename,
-        json.dumps(
-            {
-                "classification": classification_result,
-                "content_analysis": analysis_result,
-            },
-            default=str,
-        ),
-    )
-    return analysis_result
-
-
-@app.get("/content_storage/{contract_filename}")
-async def store_content(contract_filename: str) -> dict[str, Any]:
-    content_analysis_result = None
-    classification_result = None
-    cached_results = await app.state.redis.get(contract_filename)
-    if cached_results is not None:
-        cached_data = json.loads(cached_results)
-        if "storage" in cached_data:
-            logger.info("Using cached kg result")
-            return cached_data["storage"]
-        if "content_analysis" in cached_data:
-            logger.info("Using cached content analysis result")
-            content_analysis_result = cached_data.get("content_analysis")
-
-            classification_result = cached_data.get("classification")
-
-    if not content_analysis_result:
-        content_analysis_result = await analyze_contract(contract_filename)
-        if "error" in content_analysis_result:
-            return content_analysis_result
-        cached_results = await app.state.redis.get(contract_filename)
-        cached_data = json.loads(cached_results)
-        classification_result = cached_data.get("classification")
-
-    db = app.state.neo4j
-    result = await db.generate_contract_kg(
-        contract_data=content_analysis_result,
-        contract_path=f"uploads/{contract_filename}",
-    )
-    if "error" in result:
-        return result
-
-    await app.state.redis.set(
-        contract_filename,
-        json.dumps(
-            {
-                "classification": classification_result,
-                "content_analysis": content_analysis_result,
-                "storage": result,
-            }
-        ),
-    )
-    return result
-
-
-@app.get("/ontology_analysis/{contract_filename}")
-async def analyze_ontology(contract_filename: str):
-    parser: PDFParser = PDFParser()
-    file_content: str = await parser.parse_async(file_name=contract_filename)
-    analyzer: OntologyAnalyzer = OntologyAnalyzer()
-    results = await analyzer.forward(text=file_content)
-    return results
-
-
-@app.get("/kg_extraction/{contract_filename}")
-async def extract_knowledge_graph(contract_filename: str):
-    parser: PDFParser = PDFParser()
-    file_content: str = await parser.parse_async(file_name=contract_filename)
-    analyzer: OntologyAnalyzer = OntologyAnalyzer()
-    ontology = await analyzer.forward(file_content)
-    if "error" in ontology:
-        return ontology
-    kg_extractor: KnowledgeGraphExtractor = KnowledgeGraphExtractor()
-    result = await kg_extractor.forward(text=file_content, ontology=ontology)
-    return result

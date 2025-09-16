@@ -1,13 +1,16 @@
 from hashlib import sha256
 import json
+import threading
 from typing import Any, Optional
 
 import dspy
 from dspy.clients import Cache
 import redis
-from redis import Redis
+from redis.asyncio import Redis as AsyncRedis
 
-from app.config import settings
+from ..config import get_settings
+
+settings = get_settings()
 
 
 class RedisCache(Cache):
@@ -21,7 +24,8 @@ class RedisCache(Cache):
 
     def __init__(
         self,
-        redis_client: Optional[Redis] = None,
+        redis_client: Optional[redis.Redis] = None,
+        redis_async_client: Optional[AsyncRedis] = None,
         namespace: str = "dspy:cache:",
         ttl_seconds: Optional[int] = 3600,
         # accept the common flags so you can swap this in without breaking code
@@ -37,9 +41,17 @@ class RedisCache(Cache):
             **kwargs,
         )
 
-        self.r = redis_client or redis.from_url(settings.REDIS_URL)
+        # Use a plain (sync) Redis client for DSPy cache operations.
+        # Ensure decoded string responses to avoid bytes/JSON issues.
+        # Sync client for compatibility with DSPy's sync Cache API
+        self.r: redis.Redis = redis_client or redis.from_url(
+            settings.REDIS_URL, decode_responses=True
+        )
+        # Optional async client if the host app wants to provide one
+        self.ra: Optional[AsyncRedis] = redis_async_client
         self.namespace = namespace
         self.ttl = ttl_seconds
+        self._mem: dict[str, Any] = {}
 
     # --- Keying strategy  ---
     def cache_key(
@@ -72,14 +84,20 @@ class RedisCache(Cache):
         ignored_args_for_cache_key: Optional[list[str]] = None,
     ) -> Any:
         key = self.cache_key(request, ignored_args_for_cache_key)
-        raw = self.r.get(key)
-        if not raw:
-            return None
+        # If we're inside an async loop, avoid blocking: use memory cache only.
         try:
-            return json.loads(str(raw))
-        except json.JSONDecodeError:
-            # if someone manually wrote non-json, just return raw
-            return raw
+            import asyncio
+
+            asyncio.get_running_loop()
+            if key in self._mem:
+                return self._mem[key]
+            return None
+        except RuntimeError:
+            try:
+                self.r.delete(key)
+            except Exception:
+                pass
+            return None
 
     # --- Write to Redis ---
     def put(
@@ -90,14 +108,36 @@ class RedisCache(Cache):
         enable_memory_cache: bool = True,  # kept for signature compatibility
     ) -> None:
         key = self.cache_key(request, ignored_args_for_cache_key)
-        payload = json.dumps(value, ensure_ascii=False)
-        if self.ttl and self.ttl > 0:
-            self.r.set(key, payload, ex=self.ttl)
-        else:
-            self.r.set(key, payload)
+        # Always populate local memory cache to keep async paths responsive
+        self._mem[key] = value
+        # Try to serialize for Redis persistence; if it fails, skip Redis write gracefully
+        try:
+            payload = json.dumps(value, ensure_ascii=False)
+        except TypeError:
+            payload = None
+
+        def _write():
+            if payload is None:
+                return
+            try:
+                if self.ttl and self.ttl > 0:
+                    self.r.set(key, payload, ex=self.ttl)
+                else:
+                    self.r.set(key, payload)
+            except Exception:
+                pass
+
+        try:
+            import asyncio
+
+            asyncio.get_running_loop()
+            threading.Thread(target=_write, daemon=True).start()
+        except RuntimeError:
+            # No running loop: safe to write synchronously
+            _write()
 
 
-def setup_dspy(redis_client: Redis | None = None) -> None:
+def setup_dspy(redis_client: AsyncRedis | None = None) -> None:
     """Sets up the dspy configuration using environment variables.
     Raises:
         ValueError: If required environment variables are not set.
@@ -118,4 +158,4 @@ def setup_dspy(redis_client: Redis | None = None) -> None:
             temperature=0.0,
         )
     )
-    dspy.cache = RedisCache()
+    dspy.cache = RedisCache(redis_async_client=redis_client)
