@@ -244,7 +244,10 @@ function SchemaBlock({ schema }) {
       >
         <MiniMap />
         <Controls />
-        <Background gap={12} />
+        <Background gap={12}
+          color="transparent"   // makes grid lines invisible
+        // style={{ backgroundColor: 'transparent' }} // makes background transparent
+        />
       </ReactFlow>
       {exportText ? <pre className="schema-json" style={{ marginTop: 8 }}>{exportText}</pre> : null}
       <br />

@@ -53,3 +53,17 @@ class ReplyClassification(Signature):
 
     text: str = InputField(description="The user's reply")
     label: str = OutputField(description="One of: affirmative, negative, neutral")
+
+
+class SchemaRefinement(Signature):
+    """Revise an existing schema according to user instructions."""
+
+    instruction: str = InputField(
+        description="Natural language instructions describing desired schema changes"
+    )
+    current_schema: Schema = InputField(
+        description="The current proposed schema to be revised"
+    )
+    proposed_schema: Schema = OutputField(
+        description="The updated proposed schema after applying the changes"
+    )

@@ -149,22 +149,35 @@ def setup_dspy(redis_client: AsyncRedis | None = None) -> None:
             "OPENAI_MODEL and OPENAI_API_KEY must be set as environment variables."
         )
 
-    # Prefer a local LLM model id if provided; otherwise use OPENAI_MODEL
+    # Decide model and base_url (local OpenAI-compatible server if enabled)
+    use_local = settings.USE_LOCAL_LLM
+    model_id = (
+        settings.LOCAL_LLM_MODEL if use_local else None
+    ) or settings.OPENAI_MODEL
 
-    provider_model = settings.OPENAI_MODEL
-    if not str(provider_model).startswith("openai/"):
+    provider_model = model_id
+    if not use_local and not str(provider_model).startswith("openai/"):
         provider_model = "openai/" + str(provider_model)
 
-    base_url = str(settings.LOCAL_LLM_URL) if settings.USE_LOCAL_LLM else None
-    if base_url:
-        provider_model = settings.LOCAL_LLM_MODEL
-    logger.info("Configuring LM: model=%s base_url=%s", provider_model, base_url)
+    base_url = None
+    if use_local and getattr(settings, "LOCAL_LLM_URL", None):
+        base_url = str(settings.LOCAL_LLM_URL)
 
-    dspy.settings.configure(
+    logger.info(
+        "Configuring LM: model=%s base_url=%s (use_local=%s)",
+        provider_model,
+        base_url,
+        use_local,
+    )
+
+    lm_args: dict[str, Any] = dict(
         model=provider_model,
         api_key=settings.OPENAI_API_KEY.get_secret_value(),
         temperature=0.0,
-        base_url=base_url,
     )
+    if base_url:
+        lm_args["base_url"] = base_url
+
+    dspy.settings.configure(lm=dspy.LM(**lm_args))
 
     dspy.cache = RedisCache(redis_async_client=redis_client)

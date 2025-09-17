@@ -12,6 +12,7 @@ from .signatures import (
     KGSchemaProposal,
     ReplyClassification,
     SchemaExtraction,
+    SchemaRefinement,
 )
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,34 @@ class KGPipeline(Module):
         self.schema_extractor = SchemaExtractor()
         self.kg_generator = KGGenerator()
         self.reply_classifier = Predict(signature=ReplyClassification)
+        self.schema_refiner = Predict(signature=SchemaRefinement)
+
+    @staticmethod
+    def _looks_like_change_request(text: str) -> bool:
+        t = (text or "").strip().lower()
+        if not t:
+            return False
+        change_keywords = [
+            "add ",
+            "remove ",
+            "delete ",
+            "drop ",
+            "rename ",
+            "change ",
+            "update ",
+            "modify ",
+            "field",
+            "property",
+            "relation",
+            "relationship",
+            "entity",
+            "edge",
+            "connect",
+            "link",
+            "type",
+            "attributes",
+        ]
+        return any(k in t for k in change_keywords)
 
     async def aforward(self, conv_id: str, user_message: str) -> list[str]:
         redis = self.redis
@@ -151,25 +180,18 @@ class KGPipeline(Module):
                     extractor = self.schema_extractor
                     out.append("Extracting the schema from the document...\n")
                     try:
-                        file_content = self.parser.aparse(
-                            file_name=file_info.get("filename"),
-                            page_count=None,
+                        full_text = await self.parser.aparse(
+                            file_name=file_info.get("filename"), page_count=None
                         )
                         extracted = await extractor.acall(
-                            text=file_content, proposed_schema=proposal
+                            text=full_text, proposed_schema=proposal
                         )
                         if isinstance(extracted, dict) and "error" in extracted:
                             raise RuntimeError(
                                 extracted.get("details") or extracted["error"]
                             )
                         extracted_json = (
-                            extracted
-                            if isinstance(extracted, dict)
-                            else (
-                                extracted.dict()
-                                if hasattr(extracted, "dict")
-                                else extracted
-                            )
+                            extracted if isinstance(extracted, dict) else {}
                         )
                         # Persist extracted schema for later steps
                         await redis.set(
@@ -187,7 +209,31 @@ class KGPipeline(Module):
                     out.append("Understood. Extraction canceled.\n")
                     return out
                 else:
-                    # No prompt; just let the user decide when to proceed in a later message
+                    # Potential schema change request
+                    if self._looks_like_change_request(user_message):
+                        try:
+                            refined = await self.schema_refiner.acall(
+                                instruction=user_message, current_schema=proposal
+                            )
+                            refined_schema = getattr(refined, "proposed_schema", None)
+                            if refined_schema is not None:
+                                refined_json = (
+                                    refined_schema.dict()
+                                    if hasattr(refined_schema, "dict")
+                                    else refined_schema
+                                )
+                                await redis.set(
+                                    pending_key, json.dumps({"proposal": refined_json})
+                                )
+                                out.append("Updated schema based on your request:\n")
+                                out.append(json.dumps(refined_json, indent=2) + "\n")
+                                out.append(
+                                    "Let me know if you'd like to proceed with extracting schema from the document.\n"
+                                )
+                                return out
+                        except Exception:
+                            pass
+                    # Neutral/no-op: wait for clearer instruction
                     return out
 
         # Load discovery state
