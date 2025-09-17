@@ -46,3 +46,10 @@ class KGGeneration(Signature):
     knowledge_graph: KnowledgeGraph = OutputField(
         description="The extracted knowledge graph. "
     )
+
+
+class ReplyClassification(Signature):
+    """Classify a short user reply as affirmative, negative, or neutral."""
+
+    text: str = InputField(description="The user's reply")
+    label: str = OutputField(description="One of: affirmative, negative, neutral")

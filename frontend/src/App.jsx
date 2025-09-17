@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactFlow, {
+  addEdge,
+  applyEdgeChanges,
+  applyNodeChanges,
   Background,
   Controls,
+  Handle,
   MarkerType,
   MiniMap,
-  applyNodeChanges,
-  applyEdgeChanges,
-  addEdge,
-  Handle,
   Position,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
@@ -247,6 +247,7 @@ function SchemaBlock({ schema }) {
         <Background gap={12} />
       </ReactFlow>
       {exportText ? <pre className="schema-json" style={{ marginTop: 8 }}>{exportText}</pre> : null}
+      <br />
     </div>
   )
 }
@@ -265,23 +266,33 @@ function Message({ role, text }) {
     try {
       const obj = JSON.parse(candidate)
       const prefix = t.slice(0, firstBrace).trimEnd()
-      return { prefix, schema: obj }
+      const suffix = t.slice(lastBrace + 1).trimStart()
+      return { prefix, schema: obj, suffix }
     } catch {
       return { prefix: t, schema: null }
     }
   }
-  const { prefix, schema } = parseSchemaFromText(text)
+  const { prefix, schema, suffix } = parseSchemaFromText(text)
+  const bubbleText = schema ? (prefix || '') : (text || '')
   return (
     <>
       <div className={`msg ${isUser ? 'user' : 'bot'}`}>
         <div className="bubble">
           <span className="role">{isUser ? 'You' : 'Assistant'}</span>
-          <div className="text">{prefix || (text || '')}</div>
+          <div className="text">{bubbleText}</div>
         </div>
       </div>
       {!isUser && schema && (
         <div className="schema-row">
           <SchemaBlock schema={schema} />
+        </div>
+      )}
+      {!isUser && schema && suffix && (
+        <div className={`msg bot`}>
+          <div className="bubble">
+            <span className="role">Assistant</span>
+            <div className="text">{suffix}</div>
+          </div>
         </div>
       )}
     </>

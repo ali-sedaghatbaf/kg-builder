@@ -61,6 +61,7 @@ class PDFParser:
                     )
                 if page_text:
                     text += str(page_text) + "\n"
+                logger.debug(f"Parsed {len(markdown_docs)} pages from PDF")
 
         # Fallbacks if page-wise markdown is empty
         if not text.strip():

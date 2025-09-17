@@ -62,6 +62,8 @@ services:
     volumes:
       - .:/app
       - /app/.venv
+    models:
+      - llm
 
   test:
     build:
@@ -131,3 +133,10 @@ volumes:
     driver: local
   neo4j_logs:
     driver: local
+
+models:
+  llm:
+    model: ai/smollm2 # has a small context window
+    context_size: 8192
+  # embedding-model:
+  #   model: ai/all-minilm

@@ -1,5 +1,6 @@
 from hashlib import sha256
 import json
+import logging
 import threading
 from typing import Any, Optional
 
@@ -11,6 +12,7 @@ from redis.asyncio import Redis as AsyncRedis
 from ..config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class RedisCache(Cache):
@@ -147,15 +149,22 @@ def setup_dspy(redis_client: AsyncRedis | None = None) -> None:
             "OPENAI_MODEL and OPENAI_API_KEY must be set as environment variables."
         )
 
-    openai_model = settings.OPENAI_MODEL
-    if not str(openai_model).startswith("openai/"):
-        openai_model = "openai/" + str(openai_model)
+    # Prefer a local LLM model id if provided; otherwise use OPENAI_MODEL
+
+    provider_model = settings.OPENAI_MODEL
+    if not str(provider_model).startswith("openai/"):
+        provider_model = "openai/" + str(provider_model)
+
+    base_url = str(settings.LOCAL_LLM_URL) if settings.USE_LOCAL_LLM else None
+    if base_url:
+        provider_model = settings.LOCAL_LLM_MODEL
+    logger.info("Configuring LM: model=%s base_url=%s", provider_model, base_url)
 
     dspy.settings.configure(
-        lm=dspy.LM(
-            model=openai_model,
-            api_key=settings.OPENAI_API_KEY.get_secret_value(),
-            temperature=0.0,
-        )
+        model=provider_model,
+        api_key=settings.OPENAI_API_KEY.get_secret_value(),
+        temperature=0.0,
+        base_url=base_url,
     )
+
     dspy.cache = RedisCache(redis_async_client=redis_client)

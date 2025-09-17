@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     LLAMA_CLOUD_API_KEY: SecretStr | None = None
     OPENAI_MODEL: str = "gpt-4o"
 
+    USE_LOCAL_LLM: bool = False
+    LOCAL_LLM_URL: HttpUrl = HttpUrl("http://localhost:12434/v1")
+    LOCAL_LLM_MODEL: str | None = "ai/smollm2"
+
     # Langfuse
     LANGFUSE_PUBLIC_KEY: SecretStr | None = None
     LANGFUSE_SECRET_KEY: SecretStr | None = None

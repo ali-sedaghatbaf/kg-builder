@@ -95,9 +95,10 @@ body {
 }
 
 .schema-block {
-  margin-top: 10px;
-  border-top: 1px dashed var(--border);
-  padding-top: 8px;
+  /* spacing handled by .schema-row; keep this tight */
+  margin-top: 0;
+  /* border moved to .schema-row for consistent spacing */
+  padding-top: 0;
   /* ensure the flow canvas has visible area when used */
   min-height: 400px;
 }
@@ -172,8 +173,10 @@ body {
 
 .schema-row {
   width: 100%;
-  /* add spacing from the chat bubble */
-  margin: 4px 0 10px 0;
+  /* add spacing from the chat bubble above and below */
+  margin: 12px 0 16px 0;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
 }
 
 .schema-view {
