@@ -43,6 +43,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Langfuse connection failud. Please make sure it's running.")
 
     neo4j = Neo4j()
+    await neo4j.initialize_db()
     app.state.neo4j = neo4j
     redis_client = Redis(
         host=settings.REDIS_HOST,
@@ -55,7 +56,7 @@ async def lifespan(app: FastAPI):
     )
     app.state.redis = redis_client
     setup_dspy(redis_client=redis_client)
-    app.state.pipeline = KGPipeline(redis=redis_client, parser=PDFParser())
+    app.state.pipeline = KGPipeline(redis=redis_client, parser=PDFParser(), neo4j=neo4j)
     yield
     # Cleanup resources on shutdown
     await redis_client.aclose()

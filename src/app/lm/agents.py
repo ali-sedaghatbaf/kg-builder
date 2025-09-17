@@ -6,6 +6,7 @@ from dspy import ChainOfThought, Module, Predict
 from redis.asyncio import Redis
 
 from ..doc.parser import PDFParser
+from .models import KnowledgeGraph
 from .signatures import (
     KGGeneration,
     KGIntentQuestion,
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class IntentDiscoveryAgent(Module):
-    """Interacts with the user to discover their intent for knowledge graph generation and gather information."""
+    """Conversationally elicits KG-extraction requirements and missing details."""
 
     def __init__(self):
         super().__init__()
@@ -28,8 +29,22 @@ class IntentDiscoveryAgent(Module):
     async def aforward(
         self, user_goal: str, file_content: str, gathered_info: str = ""
     ):
+        # Build lightweight, code-driven guidance to keep questions KG-specific
+        guidance_points = [
+            "Ask one concise question.",
+            "If enough info to draft a schema, answer 'DONE'.",
+            "Avoid repeating answered items.",
+            "Prioritize: entities, identifiers, relations (direction/cardinality), attributes, scope, constraints, normalization, naming.",
+        ]
+        guidance = "\n".join(["Guidelines:"] + [f"- {g}" for g in guidance_points])
+
+        # Augment gathered_info with guidance (without changing signature)
+        augmented_info = f"{gathered_info}\n\n{guidance}\n"
+
         return await self.question_gen.acall(
-            user_goal=user_goal, gathered_info=gathered_info, file_content=file_content
+            user_goal=user_goal,
+            gathered_info=augmented_info,
+            file_content=file_content,
         )
 
 
@@ -92,10 +107,13 @@ class KGPipeline(Module):
     - Schema extraction
     """
 
-    def __init__(self, redis: Redis, parser: PDFParser | None = None):
+    def __init__(
+        self, redis: Redis, parser: PDFParser | None = None, neo4j: Any | None = None
+    ):
         super().__init__()
         self.redis = redis
         self.parser = parser or PDFParser()
+        self.neo4j = neo4j
         # Internal agents
         self.intent_agent = IntentDiscoveryAgent()
         self.schema_proposal_agent = SchemaProposalAgent()
@@ -178,7 +196,7 @@ class KGPipeline(Module):
                     decision = "neutral"
                 if decision == "affirmative":
                     extractor = self.schema_extractor
-                    out.append("Extracting the schema from the document...\n")
+
                     try:
                         full_text = await self.parser.aparse(
                             file_name=file_info.get("filename"), page_count=None
@@ -197,15 +215,23 @@ class KGPipeline(Module):
                         await redis.set(
                             f"schema_extracted:{conv_id}", json.dumps(extracted_json)
                         )
-                        await redis.delete(pending_key)
+
                         out.append("Here is the extracted schema:\n")
                         out.append(json.dumps(extracted_json, indent=2) + "\n")
-                    except Exception as e:
+                        # Ask explicit approval before extracting the knowledge graph
                         await redis.delete(pending_key)
+                        kg_pending_key = f"kg_pending:{conv_id}"
+                        await redis.set(
+                            kg_pending_key, json.dumps({"schema": extracted_json})
+                        )
+                        out.append(
+                            "Would you like me to extract the knowledge graph now? (yes/no)\n"
+                        )
+
+                    except Exception as e:
                         out.append(f"Sorry, extraction failed: {e}\n")
                     return out
                 elif decision == "negative":
-                    await redis.delete(pending_key)
                     out.append("Understood. Extraction canceled.\n")
                     return out
                 else:
@@ -236,15 +262,81 @@ class KGPipeline(Module):
                     # Neutral/no-op: wait for clearer instruction
                     return out
 
+        # If we are awaiting KG extraction approval, handle that next
+        kg_pending_key = f"kg_pending:{conv_id}"
+        kg_pending_raw = await redis.get(kg_pending_key)
+        if kg_pending_raw:
+            try:
+                kg_pending = json.loads(kg_pending_raw)
+            except Exception:
+                kg_pending = None
+            schema_for_kg = (kg_pending or {}).get("schema")
+            if schema_for_kg:
+                try:
+                    cls = await self.reply_classifier.acall(text=(user_message or ""))
+                    decision = getattr(cls, "label", "neutral") or "neutral"
+                    decision = str(decision).strip().lower()
+                    if decision not in {"affirmative", "negative", "neutral"}:
+                        decision = "neutral"
+                except Exception:
+                    decision = "neutral"
+
+                if decision == "affirmative":
+                    try:
+                        full_text = await self.parser.aparse(
+                            file_name=file_info.get("filename"), page_count=None
+                        )
+                        kg_dict = await self.kg_generator.acall(
+                            text=full_text, graph_schema=schema_for_kg
+                        )
+                        try:
+                            kg_model = (
+                                KnowledgeGraph.model_validate(kg_dict)
+                                if hasattr(KnowledgeGraph, "model_validate")
+                                else KnowledgeGraph(**kg_dict)
+                            )
+                        except Exception as ve:
+                            raise RuntimeError(f"Invalid KG structure: {ve}")
+
+                        if self.neo4j and hasattr(self.neo4j, "store_knowledge_graph"):
+                            store_res = await self.neo4j.store_knowledge_graph(kg_model)
+                            if isinstance(store_res, dict) and store_res.get("error"):
+                                out.append(
+                                    f"Warning: storing KG in Neo4j failed: {store_res.get('details') or store_res['error']}\n"
+                                )
+                            else:
+                                out.append("Knowledge graph stored in Neo4j.\n")
+                        else:
+                            out.append(
+                                "Note: Neo4j not configured; skipped storing the knowledge graph.\n"
+                            )
+                    except Exception as e:
+                        out.append(f"Warning: KG extraction/storage failed: {e}\n")
+                    finally:
+                        await redis.delete(kg_pending_key)
+                    return out
+                elif decision == "negative":
+                    await redis.delete(kg_pending_key)
+                    out.append("Understood. KG extraction canceled.\n")
+                    return out
+                else:
+                    # Neutral; wait for clearer instruction
+                    return out
+
         # Load discovery state
         disc_key = f"discovery:{conv_id}"
         state_raw = await redis.get(disc_key)
-        state: dict[str, Any] = {"goal": "", "qa": [], "awaiting": None}
+        state: dict[str, Any] = {
+            "goal": "",
+            "qa": [],
+            "awaiting": None,
+            "asked_count": 0,
+        }
         if state_raw:
             try:
                 state = json.loads(state_raw)
             except Exception:
-                state = {"goal": "", "qa": [], "awaiting": None}
+                state = {"goal": "", "qa": [], "awaiting": None, "asked_count": 0}
 
         # Initialize goal from the user's first message, or attach as an answer/context
         if not state.get("goal"):
@@ -268,8 +360,13 @@ class KGPipeline(Module):
                 lines.append(f"Q{i}: {qa.get('q', '')}\nA{i}: {qa.get('a', '')}\n")
             return "".join(lines)
 
-        # Intent discovery loop: ask one question at a time until DONE
+        # Intent discovery loop: ask one question at a time until DONE, max 3 questions
+        max_questions = 3
+        asked_count = int(state.get("asked_count") or 0)
         while True:
+            # Enforce hard cap
+            if asked_count >= max_questions:
+                break
             gathered_info = build_gathered_info(state)
             res = await self.intent_agent.acall(
                 user_goal=state["goal"],
@@ -283,6 +380,8 @@ class KGPipeline(Module):
                 break
             # Ask exactly one question and persist awaiting state
             state["awaiting"] = q
+            asked_count += 1
+            state["asked_count"] = asked_count
             await redis.set(disc_key, json.dumps(state))
             out.append(q + "\n")
             return out
@@ -304,7 +403,7 @@ class KGPipeline(Module):
             # Persist proposal and wait for explicit user request to extract
             await redis.set(pending_key, json.dumps({"proposal": proposal_json}))
             out.append(
-                "Let me know if you'd like to proceed with extracting this schema from the document.\n"
+                "Let me know if you'd like to proceed with extracting schema from the document.\n"
             )
             return out
         except Exception as e:

@@ -26,7 +26,7 @@ services:
       - neo4j_data:/var/lib/neo4j/data
       - neo4j_logs:/var/lib/neo4j/logs
     healthcheck:
-      test: [ "CMD", "cypher-shell", "-u", "${APP_NEO4J_USER}", "-p", "${APP_NEO4J_PASSWORD}", "--encryption=false", "RETURN 1" ]
+      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 --spider localhost:7474 || exit 1" ]
       interval: 10s
       timeout: 5s
       retries: 5

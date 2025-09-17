@@ -7,17 +7,19 @@ from .models import (
 
 
 class KGIntentQuestion(Signature):
-    """Ask the next clarifying question based on what we already know"""
+    """Ask one concise KG-extraction question, or output 'DONE'."""
 
     user_goal = InputField(
-        desc="The user's high-level goal for generating a knowledge graph"
+        desc="The user's high-level goal for generating a knowledge graph (KG) from the uploaded document"
     )
     file_content = InputField(
-        desc="The content of the uploaded document (if any), to help tailor questions"
+        desc="The content of the uploaded document (or excerpt), to tailor KG-specific questions"
     )
-    gathered_info = InputField(desc="The information gathered so far from the user")
+    gathered_info = InputField(
+        desc="The information gathered so far; do not ask about items already answered"
+    )
     question = OutputField(
-        desc="The next question to ask OR 'DONE' if enough info is gathered"
+        desc="A single concise question specific to KG extraction, OR 'DONE' if enough info is gathered"
     )
 
 
