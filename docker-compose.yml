@@ -1,4 +1,26 @@
 services:
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.41
+    container_name: jaeger
+    ports:
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"
+      - "14268:14268"
+      - "14250:14250"
+      - "9411:9411"
+      - "4317:4317" # gRPC
+      - "4318:4318" # HTTP
+    environment:
+      COLLECTOR_ZIPKIN_HTTP_PORT: 9411
+      COLLECTOR_OTLP_ENABLED: true
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:16686/api/traces" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
   redis:
     image: redis:7
     container_name: redis
@@ -39,7 +61,7 @@ services:
       - neo4j_test_data:/var/lib/neo4j/data
       - neo4j_logs:/var/lib/neo4j/logs
     healthcheck:
-      test: [ "CMD", "cypher-shell", "-u", "${APP_NEO4J_USER}", "-p", "${APP_NEO4J_PASSWORD}", "--encryption=false", "RETURN 1" ]
+      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 --spider localhost:7474 || exit 1" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -59,6 +81,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     volumes:
       - .:/app
       - /app/.venv

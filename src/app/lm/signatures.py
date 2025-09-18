@@ -6,14 +6,24 @@ from .models import (
 )
 
 
+class DocumentOverview(Signature):
+    summaries: list[str] = InputField(description="The summaries of all text chunks.")
+    overview: str = OutputField(description="A concise overview of the whole text.")
+
+
+class ChunkSummary(Signature):
+    text: str = InputField(description="The text chunk to summarize.")
+    summary: str = OutputField(description="A concise summary of the text chunk.")
+
+
 class KGIntentQuestion(Signature):
     """Ask one concise KG-extraction question, or output 'DONE'."""
 
     user_goal = InputField(
         desc="The user's high-level goal for generating a knowledge graph (KG) from the uploaded document"
     )
-    file_content = InputField(
-        desc="The content of the uploaded document (or excerpt), to tailor KG-specific questions"
+    file_overview = InputField(
+        desc="The overview of the uploaded document (or excerpt), to tailor KG-specific questions"
     )
     gathered_info = InputField(
         desc="The information gathered so far; do not ask about items already answered"
@@ -51,10 +61,12 @@ class KGGeneration(Signature):
 
 
 class ReplyClassification(Signature):
-    """Classify a short user reply as affirmative, negative, or neutral."""
+    """Classify a short user reply as affirmative, negative, or change_request (for schema changes)."""
 
     text: str = InputField(description="The user's reply")
-    label: str = OutputField(description="One of: affirmative, negative, neutral")
+    label: str = OutputField(
+        description="One of: affirmative, negative, change_request"
+    )
 
 
 class SchemaRefinement(Signature):

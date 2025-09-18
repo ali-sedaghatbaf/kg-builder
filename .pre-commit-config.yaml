@@ -1,5 +1,4 @@
 repos:
-  # --- Ruff: lint + format ---
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
@@ -7,6 +6,7 @@ repos:
         # Exclude markdown files as they can have semantic trailing whitespace
         exclude: \.md$
 
+  # --- Ruff: lint + format ---
   - repo: local
     hooks:
       - id: ruff

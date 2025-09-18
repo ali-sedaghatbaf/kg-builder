@@ -1,4 +1,3 @@
-from fastapi import Response
 from fastapi.testclient import TestClient
 import pytest
 
@@ -12,7 +11,7 @@ def client():
 
 
 def test_read_main(client):
-    response: Response = client.get("/")
+    response = client.get("/")
     assert response.status_code == 200
     assert response.json() == {"Hello": "World"}
 

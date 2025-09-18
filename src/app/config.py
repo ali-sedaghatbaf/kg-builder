@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     API_PORT: int = 8000
     API_HOST: str = "0.0.0.0"
 
+    # OpenTelemetry
+    OTEL_PYTHON_LOGGING_AND_INSTRUMENTATION_ENABLED: bool = False
+
     # DSPy
     ANTHROPIC_API_KEY: SecretStr | None = None
     OPENAI_API_KEY: SecretStr | None = None
